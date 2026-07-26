@@ -24,22 +24,22 @@ router = APIRouter(
 REPOSITORY_COLLECTION = "repositories"
 GENERAL_USERS_COLLECTION = "general_users"
 
-REPOSITORY_TYPES = {
-    "UI",
-    "API",
-}
-
 GITHUB_API_VERSION = "2022-11-28"
 GITHUB_USER_AGENT = "QA-Plain-AI-Builder"
 
 
 class RepositoryRequest(BaseModel):
-    repository_type: str = Field(
+    repository_name: str = Field(
         min_length=1,
-        max_length=10,
+        max_length=100,
     )
 
-    repository_url: str = Field(
+    ui_repository_url: str = Field(
+        min_length=1,
+        max_length=500,
+    )
+
+    api_repository_url: str = Field(
         min_length=1,
         max_length=500,
     )
@@ -50,21 +50,8 @@ class RepositoryRequest(BaseModel):
     )
 
 
-class RepositoryTestRequest(BaseModel):
-    repository_type: str = Field(
-        min_length=1,
-        max_length=10,
-    )
-
-    repository_url: str = Field(
-        min_length=1,
-        max_length=500,
-    )
-
-    github_token: Optional[str] = Field(
-        default=None,
-        max_length=1000,
-    )
+class RepositoryTestRequest(RepositoryRequest):
+    repository_id: Optional[str] = None
 
 
 def now_iso() -> str:
@@ -87,199 +74,6 @@ def normalize_email(
     return normalize_text(
         value
     ).lower()
-
-
-def normalize_repository_type(
-    value,
-) -> str:
-    repository_type = normalize_text(
-        value
-    ).upper()
-
-    if repository_type not in REPOSITORY_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "リポジトリ種別は"
-                "UIまたはAPIを指定してください。"
-            ),
-        )
-
-    return repository_type
-
-
-def normalize_repository_url(
-    value,
-) -> str:
-    repository_url = normalize_text(
-        value
-    )
-
-    try:
-        owner, repository_name = (
-            parse_github_repository_url(
-                repository_url
-            )
-        )
-
-    except ValueError as error:
-        raise HTTPException(
-            status_code=400,
-            detail=str(error),
-        ) from error
-
-    return (
-        f"https://github.com/"
-        f"{owner}/{repository_name}"
-    )
-
-
-def parse_github_repository_url(
-    repository_url: str,
-) -> tuple[str, str]:
-    value = normalize_text(
-        repository_url
-    )
-
-    if not value:
-        raise ValueError(
-            "リポジトリURLを入力してください。"
-        )
-
-    parsed = urlparse(
-        value
-    )
-
-    if (
-        parsed.scheme not in {
-            "http",
-            "https",
-        }
-        or parsed.netloc.lower()
-        not in {
-            "github.com",
-            "www.github.com",
-        }
-    ):
-        raise ValueError(
-            "GitHubのリポジトリURLを入力してください。"
-        )
-
-    path_parts = [
-        part
-        for part in parsed.path.split("/")
-        if part
-    ]
-
-    if len(path_parts) != 2:
-        raise ValueError(
-            "リポジトリURLは"
-            "https://github.com/所有者/リポジトリ名"
-            "の形式で入力してください。"
-        )
-
-    owner = path_parts[0]
-    repository_name = path_parts[1]
-
-    if repository_name.endswith(
-        ".git"
-    ):
-        repository_name = (
-            repository_name[:-4]
-        )
-
-    if (
-        not owner
-        or not repository_name
-    ):
-        raise ValueError(
-            "GitHubの所有者と"
-            "リポジトリ名を確認してください。"
-        )
-
-    return (
-        owner,
-        repository_name,
-    )
-
-
-def get_fernet() -> Fernet:
-    encryption_key = normalize_text(
-        os.getenv(
-            "REPOSITORY_TOKEN_ENCRYPTION_KEY",
-            "",
-        )
-    )
-
-    if not encryption_key:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "REPOSITORY_TOKEN_ENCRYPTION_KEY "
-                "is not configured"
-            ),
-        )
-
-    try:
-        return Fernet(
-            encryption_key.encode(
-                "utf-8"
-            )
-        )
-
-    except Exception as error:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "REPOSITORY_TOKEN_ENCRYPTION_KEY "
-                "is invalid"
-            ),
-        ) from error
-
-
-def encrypt_token(
-    token: str,
-) -> str:
-    return (
-        get_fernet()
-        .encrypt(
-            token.encode(
-                "utf-8"
-            )
-        )
-        .decode(
-            "utf-8"
-        )
-    )
-
-
-def decrypt_token(
-    encrypted_token: str,
-) -> str:
-    if not encrypted_token:
-        return ""
-
-    try:
-        return (
-            get_fernet()
-            .decrypt(
-                encrypted_token.encode(
-                    "utf-8"
-                )
-            )
-            .decode(
-                "utf-8"
-            )
-        )
-
-    except InvalidToken as error:
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                "保存済みGitHubトークンを"
-                "復号できませんでした。"
-            ),
-        ) from error
 
 
 def authenticate_user(
@@ -412,6 +206,168 @@ def authenticate_user(
     }
 
 
+def parse_github_repository_url(
+    repository_url: str,
+) -> tuple[str, str]:
+    value = normalize_text(
+        repository_url
+    )
+
+    if not value:
+        raise HTTPException(
+            status_code=400,
+            detail="リポジトリURLを入力してください。",
+        )
+
+    parsed = urlparse(
+        value
+    )
+
+    if (
+        parsed.scheme not in {
+            "http",
+            "https",
+        }
+        or parsed.netloc.lower()
+        not in {
+            "github.com",
+            "www.github.com",
+        }
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "GitHubのリポジトリURLを"
+                "入力してください。"
+            ),
+        )
+
+    path_parts = [
+        part
+        for part in parsed.path.split("/")
+        if part
+    ]
+
+    if len(path_parts) != 2:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "リポジトリURLは"
+                "https://github.com/所有者/リポジトリ名"
+                "の形式で入力してください。"
+            ),
+        )
+
+    owner = path_parts[0]
+    repository_name = path_parts[1]
+
+    if repository_name.endswith(
+        ".git"
+    ):
+        repository_name = (
+            repository_name[:-4]
+        )
+
+    return (
+        owner,
+        repository_name,
+    )
+
+
+def normalize_repository_url(
+    repository_url: str,
+) -> str:
+    owner, repository_name = (
+        parse_github_repository_url(
+            repository_url
+        )
+    )
+
+    return (
+        f"https://github.com/"
+        f"{owner}/{repository_name}"
+    )
+
+
+def get_fernet() -> Fernet:
+    encryption_key = normalize_text(
+        os.getenv(
+            "REPOSITORY_TOKEN_ENCRYPTION_KEY",
+            "",
+        )
+    )
+
+    if not encryption_key:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "REPOSITORY_TOKEN_ENCRYPTION_KEY "
+                "is not configured"
+            ),
+        )
+
+    try:
+        return Fernet(
+            encryption_key.encode(
+                "utf-8"
+            )
+        )
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "REPOSITORY_TOKEN_ENCRYPTION_KEY "
+                "is invalid"
+            ),
+        ) from error
+
+
+def encrypt_token(
+    token: str,
+) -> str:
+    return (
+        get_fernet()
+        .encrypt(
+            token.encode(
+                "utf-8"
+            )
+        )
+        .decode(
+            "utf-8"
+        )
+    )
+
+
+def decrypt_token(
+    encrypted_token: str,
+) -> str:
+    if not encrypted_token:
+        return ""
+
+    try:
+        return (
+            get_fernet()
+            .decrypt(
+                encrypted_token.encode(
+                    "utf-8"
+                )
+            )
+            .decode(
+                "utf-8"
+            )
+        )
+
+    except InvalidToken as error:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "保存済みGitHubトークンを"
+                "復号できませんでした。"
+            ),
+        ) from error
+
+
 def get_repository_document(
     repository_id: str,
     owner_email: str,
@@ -452,11 +408,11 @@ def get_repository_document(
     return document
 
 
-def get_repository_by_type(
+def check_duplicate_name(
     owner_email: str,
-    repository_type: str,
+    repository_name: str,
     exclude_id: Optional[str] = None,
-):
+) -> None:
     documents = (
         get_firestore_client()
         .collection(
@@ -468,9 +424,9 @@ def get_repository_by_type(
             owner_email,
         )
         .where(
-            "repository_type",
+            "repository_name",
             "==",
-            repository_type,
+            repository_name,
         )
         .limit(2)
         .stream()
@@ -478,30 +434,13 @@ def get_repository_by_type(
 
     for document in documents:
         if document.id != exclude_id:
-            return document
-
-    return None
-
-
-def check_duplicate_repository_type(
-    owner_email: str,
-    repository_type: str,
-    exclude_id: Optional[str] = None,
-) -> None:
-    document = get_repository_by_type(
-        owner_email,
-        repository_type,
-        exclude_id,
-    )
-
-    if document:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"{repository_type}用リポジトリは"
-                "既に登録されています。"
-            ),
-        )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "同じ名前のリポジトリが"
+                    "既に登録されています。"
+                ),
+            )
 
 
 def document_to_dict(
@@ -512,19 +451,29 @@ def document_to_dict(
     return {
         "id":
             document.id,
-        "repository_type":
+        "repository_name":
             data.get(
-                "repository_type",
+                "repository_name",
                 "",
             ),
-        "repository_url":
+        "ui_repository_url":
             data.get(
-                "repository_url",
+                "ui_repository_url",
                 "",
             ),
-        "connection_status":
+        "api_repository_url":
             data.get(
-                "connection_status",
+                "api_repository_url",
+                "",
+            ),
+        "ui_connection_status":
+            data.get(
+                "ui_connection_status",
+                "NOT_TESTED",
+            ),
+        "api_connection_status":
+            data.get(
+                "api_connection_status",
                 "NOT_TESTED",
             ),
         "last_tested_at":
@@ -545,32 +494,17 @@ def document_to_dict(
 def resolve_github_token(
     *,
     owner_email: str,
-    repository_type: str,
     supplied_token: Optional[str],
     repository_id: Optional[str] = None,
 ) -> str:
-    normalized_token = normalize_text(
+    supplied_token = normalize_text(
         supplied_token
     )
 
-    if normalized_token:
-        return normalized_token
+    if supplied_token:
+        return supplied_token
 
-    document = None
-
-    if repository_id:
-        document = get_repository_document(
-            repository_id,
-            owner_email,
-        )
-
-    if not document:
-        document = get_repository_by_type(
-            owner_email,
-            repository_type,
-        )
-
-    if not document:
+    if not repository_id:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -578,6 +512,11 @@ def resolve_github_token(
                 "入力してください。"
             ),
         )
+
+    document = get_repository_document(
+        repository_id,
+        owner_email,
+    )
 
     data = document.to_dict() or {}
 
@@ -605,7 +544,7 @@ def resolve_github_token(
 def test_github_repository(
     repository_url: str,
     github_token: str,
-) -> dict:
+) -> bool:
     owner, repository_name = (
         parse_github_repository_url(
             repository_url
@@ -617,20 +556,18 @@ def test_github_repository(
         f"{owner}/{repository_name}"
     )
 
-    headers = {
-        "Accept":
-            "application/vnd.github+json",
-        "Authorization":
-            f"Bearer {github_token}",
-        "X-GitHub-Api-Version":
-            GITHUB_API_VERSION,
-        "User-Agent":
-            GITHUB_USER_AGENT,
-    }
-
     request = Request(
         api_url,
-        headers=headers,
+        headers={
+            "Accept":
+                "application/vnd.github+json",
+            "Authorization":
+                f"Bearer {github_token}",
+            "X-GitHub-Api-Version":
+                GITHUB_API_VERSION,
+            "User-Agent":
+                GITHUB_USER_AGENT,
+        },
         method="GET",
     )
 
@@ -639,7 +576,7 @@ def test_github_repository(
             request,
             timeout=15,
         ) as response:
-            status_code = response.status
+            return response.status == 200
 
     except HTTPError as error:
         if error.code == 401:
@@ -684,21 +621,6 @@ def test_github_repository(
             ),
         ) from error
 
-    if status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "GitHub APIから"
-                "正常な応答を取得できませんでした。"
-            ),
-        )
-
-    return {
-        "connected": True,
-        "owner": owner,
-        "repository_name": repository_name,
-    }
-
 
 @router.get("")
 def get_repositories(
@@ -731,22 +653,114 @@ def get_repositories(
     ]
 
     repositories.sort(
-        key=lambda item: (
-            0
-            if item.get(
-                "repository_type"
-            ) == "UI"
-            else 1,
-            item.get(
-                "repository_url",
-                "",
-            ),
+        key=lambda item: item.get(
+            "repository_name",
+            "",
         )
     )
 
     return {
         "repositories":
             repositories,
+    }
+
+
+@router.post(
+    "/test"
+)
+def test_repository(
+    request: RepositoryTestRequest,
+    authorization: str = Header(...),
+):
+    user = authenticate_user(
+        authorization
+    )
+
+    owner_email = user["email"]
+
+    ui_repository_url = (
+        normalize_repository_url(
+            request.ui_repository_url
+        )
+    )
+
+    api_repository_url = (
+        normalize_repository_url(
+            request.api_repository_url
+        )
+    )
+
+    github_token = resolve_github_token(
+        owner_email=owner_email,
+        supplied_token=request.github_token,
+        repository_id=request.repository_id,
+    )
+
+    ui_connected = test_github_repository(
+        ui_repository_url,
+        github_token,
+    )
+
+    api_connected = test_github_repository(
+        api_repository_url,
+        github_token,
+    )
+
+    tested_at = now_iso()
+
+    if request.repository_id:
+        document = get_repository_document(
+            request.repository_id,
+            owner_email,
+        )
+
+        update_data = {
+            "ui_repository_url":
+                ui_repository_url,
+            "api_repository_url":
+                api_repository_url,
+            "ui_connection_status":
+                "SUCCESS"
+                if ui_connected
+                else "FAILED",
+            "api_connection_status":
+                "SUCCESS"
+                if api_connected
+                else "FAILED",
+            "last_tested_at":
+                tested_at,
+            "updated_at":
+                tested_at,
+        }
+
+        if normalize_text(
+            request.github_token
+        ):
+            update_data[
+                "github_token_enc"
+            ] = encrypt_token(
+                github_token
+            )
+
+        document.reference.update(
+            update_data
+        )
+
+    return {
+        "ui_repository_connected":
+            ui_connected,
+        "api_repository_connected":
+            api_connected,
+        "ui_connection_status":
+            "SUCCESS"
+            if ui_connected
+            else "FAILED",
+        "api_connection_status":
+            "SUCCESS"
+            if api_connected
+            else "FAILED",
+        "last_tested_at":
+            tested_at,
     }
 
 
@@ -785,21 +799,25 @@ def create_repository(
 
     owner_email = user["email"]
 
-    repository_type = (
-        normalize_repository_type(
-            request.repository_type
-        )
+    repository_name = normalize_text(
+        request.repository_name
     )
 
-    repository_url = (
+    ui_repository_url = (
         normalize_repository_url(
-            request.repository_url
+            request.ui_repository_url
         )
     )
 
-    check_duplicate_repository_type(
+    api_repository_url = (
+        normalize_repository_url(
+            request.api_repository_url
+        )
+    )
+
+    check_duplicate_name(
         owner_email,
-        repository_type,
+        repository_name,
     )
 
     github_token = normalize_text(
@@ -815,8 +833,13 @@ def create_repository(
             ),
         )
 
-    test_github_repository(
-        repository_url,
+    ui_connected = test_github_repository(
+        ui_repository_url,
+        github_token,
+    )
+
+    api_connected = test_github_repository(
+        api_repository_url,
         github_token,
     )
 
@@ -825,16 +848,24 @@ def create_repository(
     data = {
         "owner_email":
             owner_email,
-        "repository_type":
-            repository_type,
-        "repository_url":
-            repository_url,
+        "repository_name":
+            repository_name,
+        "ui_repository_url":
+            ui_repository_url,
+        "api_repository_url":
+            api_repository_url,
         "github_token_enc":
             encrypt_token(
                 github_token
             ),
-        "connection_status":
-            "SUCCESS",
+        "ui_connection_status":
+            "SUCCESS"
+            if ui_connected
+            else "FAILED",
+        "api_connection_status":
+            "SUCCESS"
+            if api_connected
+            else "FAILED",
         "last_tested_at":
             now,
         "created_at":
@@ -881,36 +912,35 @@ def update_repository(
 
     current = document.to_dict() or {}
 
-    repository_type = (
-        normalize_repository_type(
-            request.repository_type
-        )
+    repository_name = normalize_text(
+        request.repository_name
     )
 
-    repository_url = (
+    ui_repository_url = (
         normalize_repository_url(
-            request.repository_url
+            request.ui_repository_url
         )
     )
 
-    check_duplicate_repository_type(
+    api_repository_url = (
+        normalize_repository_url(
+            request.api_repository_url
+        )
+    )
+
+    check_duplicate_name(
         owner_email,
-        repository_type,
+        repository_name,
         repository_id,
     )
 
-    github_token = resolve_github_token(
-        owner_email=owner_email,
-        repository_type=repository_type,
-        supplied_token=request.github_token,
-        repository_id=repository_id,
-    )
-
     update_data = {
-        "repository_type":
-            repository_type,
-        "repository_url":
-            repository_url,
+        "repository_name":
+            repository_name,
+        "ui_repository_url":
+            ui_repository_url,
+        "api_repository_url":
+            api_repository_url,
         "updated_at":
             now_iso(),
     }
@@ -918,30 +948,42 @@ def update_repository(
     if normalize_text(
         request.github_token
     ):
-        update_data["github_token_enc"] = (
-            encrypt_token(
-                github_token
+        update_data[
+            "github_token_enc"
+        ] = encrypt_token(
+            normalize_text(
+                request.github_token
             )
         )
 
     if (
-        repository_type
+        repository_name
         != current.get(
-            "repository_type"
+            "repository_name"
         )
-        or repository_url
+        or ui_repository_url
         != current.get(
-            "repository_url"
+            "ui_repository_url"
+        )
+        or api_repository_url
+        != current.get(
+            "api_repository_url"
         )
         or normalize_text(
             request.github_token
         )
     ):
-        update_data["connection_status"] = (
-            "NOT_TESTED"
-        )
+        update_data[
+            "ui_connection_status"
+        ] = "NOT_TESTED"
 
-        update_data["last_tested_at"] = None
+        update_data[
+            "api_connection_status"
+        ] = "NOT_TESTED"
+
+        update_data[
+            "last_tested_at"
+        ] = None
 
     document.reference.update(
         update_data
@@ -971,84 +1013,8 @@ def delete_repository(
     document.reference.delete()
 
     return {
-        "status": "deleted",
-        "id": repository_id,
-    }
-
-
-@router.post(
-    "/test"
-)
-def test_repository(
-    request: RepositoryTestRequest,
-    authorization: str = Header(...),
-):
-    user = authenticate_user(
-        authorization
-    )
-
-    owner_email = user["email"]
-
-    repository_type = (
-        normalize_repository_type(
-            request.repository_type
-        )
-    )
-
-    repository_url = (
-        normalize_repository_url(
-            request.repository_url
-        )
-    )
-
-    github_token = resolve_github_token(
-        owner_email=owner_email,
-        repository_type=repository_type,
-        supplied_token=request.github_token,
-    )
-
-    result = test_github_repository(
-        repository_url,
-        github_token,
-    )
-
-    document = get_repository_by_type(
-        owner_email,
-        repository_type,
-    )
-
-    tested_at = now_iso()
-
-    if document:
-        document.reference.update({
-            "repository_url":
-                repository_url,
-            "connection_status":
-                "SUCCESS",
-            "last_tested_at":
-                tested_at,
-            "updated_at":
-                tested_at,
-        })
-
-        if normalize_text(
-            request.github_token
-        ):
-            document.reference.update({
-                "github_token_enc":
-                    encrypt_token(
-                        github_token
-                    )
-            })
-
-    return {
-        **result,
-        "repository_type":
-            repository_type,
-        "repository_url":
-            repository_url,
-        "connection_status":
-            "SUCCESS",
-        "last_tested_at":
-            tested_at,
+        "status":
+            "deleted",
+        "id":
+            repository_id,
     }
