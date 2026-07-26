@@ -122,12 +122,20 @@ def create_session(
         is_admin_user
     )
 
+    is_general_user = (
+        document is not None
+        and is_active
+    )
+
     return {
         "uid": uid,
         "email": email,
         "is_system_administrator": (
             is_system_administrator
         ),
-        "is_admin_user": is_admin_user,
+        "is_general_user": is_general_user,
+        "is_general_user_administrator": (
+            is_admin_user
+        ),
         "can_manage_users": can_manage_users,
     }
