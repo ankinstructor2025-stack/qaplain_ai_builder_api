@@ -19,9 +19,6 @@ router = APIRouter(
 
 ADMIN_COLLECTION = "admin_users"
 GENERAL_COLLECTION = "general_users"
-TENANT_COLLECTION = "tenants"
-
-
 class AdminUserRequest(BaseModel):
     user_name: str = Field(
         min_length=1,
@@ -33,10 +30,6 @@ class AdminUserRequest(BaseModel):
         max_length=200,
     )
 
-    tenant_id: str = Field(
-        min_length=1,
-        max_length=200,
-    )
 
     start_date: str
     end_date: Optional[str] = None
@@ -201,67 +194,6 @@ def get_document_by_email(
     )
 
 
-def get_tenant_document(
-    tenant_id: str,
-):
-    normalized_tenant_id = normalize_text(
-        tenant_id
-    )
-
-    if not normalized_tenant_id:
-        raise HTTPException(
-            status_code=400,
-            detail="テナントを選択してください。",
-        )
-
-    document = (
-        get_firestore_client()
-        .collection(
-            TENANT_COLLECTION
-        )
-        .document(
-            normalized_tenant_id
-        )
-        .get()
-    )
-
-    if not document.exists:
-        raise HTTPException(
-            status_code=400,
-            detail="指定されたテナントが見つかりません。",
-        )
-
-    return document
-
-
-def tenant_to_dict(
-    document,
-) -> dict:
-    data = document.to_dict() or {}
-
-    return {
-        "tenant_id":
-            document.id,
-        "tenant_name":
-            data.get(
-                "tenant_name",
-                "",
-            ),
-        "parent_user":
-            data.get(
-                "parent_user",
-                "",
-            ),
-        "start_date":
-            data.get(
-                "start_date"
-            ),
-        "end_date":
-            data.get(
-                "end_date"
-            ),
-    }
-
 
 def check_duplicate_email(
     email: str,
@@ -285,46 +217,11 @@ def check_duplicate_email(
         )
 
 
-def get_tenant_name(
-    tenant_id: str,
-) -> str:
-    if not tenant_id:
-        return ""
-
-    document = (
-        get_firestore_client()
-        .collection(
-            TENANT_COLLECTION
-        )
-        .document(
-            tenant_id
-        )
-        .get()
-    )
-
-    if not document.exists:
-        return ""
-
-    return (
-        document.to_dict()
-        or {}
-    ).get(
-        "tenant_name",
-        "",
-    )
-
 
 def document_to_dict(
     document,
 ) -> dict:
     data = document.to_dict() or {}
-
-    tenant_id = normalize_text(
-        data.get(
-            "tenant_id",
-            "",
-        )
-    )
 
     return {
         "id":
@@ -338,12 +235,6 @@ def document_to_dict(
             data.get(
                 "email",
                 "",
-            ),
-        "tenant_id":
-            tenant_id,
-        "tenant_name":
-            get_tenant_name(
-                tenant_id
             ),
         "start_date":
             data.get(
@@ -369,7 +260,6 @@ def sync_general_user(
     *,
     user_name: str,
     email: str,
-    tenant_id: str,
     start_date: str,
     end_date: Optional[str],
     updated_at: str,
@@ -384,8 +274,6 @@ def sync_general_user(
             user_name,
         "email":
             email,
-        "tenant_id":
-            tenant_id,
         "user_type":
             "ADMIN",
         "parent_user":
@@ -424,64 +312,21 @@ def delete_general_users_for_admin(
     db,
     *,
     email: str,
-    tenant_id: str,
 ) -> None:
     documents = (
         db.collection(
             GENERAL_COLLECTION
         )
         .where(
-            "tenant_id",
+            "parent_user",
             "==",
-            tenant_id,
+            email,
         )
         .stream()
     )
 
     for document in documents:
-        data = document.to_dict() or {}
-
-        if (
-            normalize_email(
-                data.get(
-                    "parent_user",
-                    "",
-                )
-            )
-            == email
-        ):
-            document.reference.delete()
-
-
-@router.get(
-    "/available-tenants"
-)
-def get_available_tenants(
-    authorization: str = Header(...),
-):
-    authenticate_system_administrator(
-        authorization
-    )
-
-    documents = (
-        get_firestore_client()
-        .collection(
-            TENANT_COLLECTION
-        )
-        .order_by(
-            "tenant_name"
-        )
-        .stream()
-    )
-
-    return {
-        "tenants": [
-            tenant_to_dict(
-                document
-            )
-            for document in documents
-        ]
-    }
+        document.reference.delete()
 
 
 @router.get("")
@@ -565,9 +410,6 @@ def create_admin_user(
     email = normalize_email(
         request.email
     )
-    tenant_id = normalize_text(
-        request.tenant_id
-    )
     start_date = request.start_date.strip()
     end_date = normalize_end_date(
         request.end_date
@@ -578,9 +420,6 @@ def create_admin_user(
         end_date,
     )
 
-    get_tenant_document(
-        tenant_id
-    )
 
     check_duplicate_email(
         email
@@ -593,8 +432,6 @@ def create_admin_user(
             user_name,
         "email":
             email,
-        "tenant_id":
-            tenant_id,
         "start_date":
             start_date,
         "end_date":
@@ -622,7 +459,6 @@ def create_admin_user(
         db,
         user_name=user_name,
         email=email,
-        tenant_id=tenant_id,
         start_date=start_date,
         end_date=end_date,
         updated_at=now,
@@ -712,13 +548,7 @@ def update_admin_user(
             ),
         )
 
-    tenant_id = normalize_text(
-        request.tenant_id
-    )
 
-    get_tenant_document(
-        tenant_id
-    )
 
     user_name = request.user_name.strip()
 
@@ -736,8 +566,6 @@ def update_admin_user(
     document_reference.update({
         "user_name":
             user_name,
-        "tenant_id":
-            tenant_id,
         "end_date":
             end_date,
         "updated_at":
@@ -748,7 +576,6 @@ def update_admin_user(
         db,
         user_name=user_name,
         email=current_email,
-        tenant_id=tenant_id,
         start_date=current_start_date,
         end_date=end_date,
         updated_at=now,
@@ -804,19 +631,11 @@ def delete_admin_user(
         )
     )
 
-    tenant_id = normalize_text(
-        current.get(
-            "tenant_id",
-            "",
-        )
-    )
 
-    if tenant_id:
-        delete_general_users_for_admin(
-            db,
-            email=email,
-            tenant_id=tenant_id,
-        )
+    delete_general_users_for_admin(
+        db,
+        email=email,
+    )
 
     document_reference.delete()
 
