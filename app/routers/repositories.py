@@ -5,7 +5,6 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
-from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
@@ -45,11 +44,6 @@ class RepositoryRequest(BaseModel):
     )
 
     github_token: Optional[str] = Field(
-        default=None,
-        max_length=1000,
-    )
-
-    encryption_key: Optional[str] = Field(
         default=None,
         max_length=1000,
     )
@@ -294,81 +288,6 @@ def normalize_repository_url(
     )
 
 
-def create_fernet(
-    encryption_key: str,
-) -> Fernet:
-    key = normalize_text(
-        encryption_key
-    )
-
-    if not key:
-        raise HTTPException(
-            status_code=400,
-            detail="暗号化キーを入力してください。",
-        )
-
-    try:
-        return Fernet(
-            key.encode(
-                "utf-8"
-            )
-        )
-
-    except Exception as error:
-        raise HTTPException(
-            status_code=400,
-            detail="暗号化キーの形式が正しくありません。",
-        ) from error
-
-
-def encrypt_token(
-    token: str,
-    encryption_key: str,
-) -> str:
-    return (
-        create_fernet(
-            encryption_key
-        )
-        .encrypt(
-            token.encode(
-                "utf-8"
-            )
-        )
-        .decode(
-            "utf-8"
-        )
-    )
-
-
-def decrypt_token(
-    encrypted_token: str,
-    encryption_key: str,
-) -> str:
-    if not encrypted_token:
-        return ""
-
-    try:
-        return (
-            create_fernet(
-                encryption_key
-            )
-            .decrypt(
-                encrypted_token.encode(
-                    "utf-8"
-                )
-            )
-            .decode(
-                "utf-8"
-            )
-        )
-
-    except InvalidToken as error:
-        raise HTTPException(
-            status_code=400,
-            detail="暗号化キーが保存済みトークンと一致しません。",
-        ) from error
-
-
 def get_repository_document(
     repository_id: str,
     owner_email: str,
@@ -496,7 +415,6 @@ def resolve_github_token(
     *,
     owner_email: str,
     supplied_token: Optional[str],
-    encryption_key: Optional[str],
     repository_id: Optional[str] = None,
 ) -> str:
     supplied_token = normalize_text(
@@ -522,14 +440,14 @@ def resolve_github_token(
 
     data = document.to_dict() or {}
 
-    encrypted_token = normalize_text(
+    saved_token = normalize_text(
         data.get(
-            "github_token_enc",
+            "github_token",
             "",
         )
     )
 
-    if not encrypted_token:
+    if not saved_token:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -538,12 +456,7 @@ def resolve_github_token(
             ),
         )
 
-    return decrypt_token(
-        encrypted_token,
-        normalize_text(
-            encryption_key
-        ),
-    )
+    return saved_token
 
 
 def test_github_repository(
@@ -698,7 +611,6 @@ def test_repository(
     github_token = resolve_github_token(
         owner_email=owner_email,
         supplied_token=request.github_token,
-        encryption_key=request.encryption_key,
         repository_id=request.repository_id,
     )
 
@@ -743,10 +655,8 @@ def test_repository(
             request.github_token
         ):
             update_data[
-                "github_token_enc"
-            ] = encrypt_token(
-                github_token
-            )
+                "github_token"
+            ] = github_token
 
         document.reference.update(
             update_data
@@ -830,10 +740,6 @@ def create_repository(
         request.github_token
     )
 
-    encryption_key = normalize_text(
-        request.encryption_key
-    )
-
     if not github_token:
         raise HTTPException(
             status_code=400,
@@ -841,12 +747,6 @@ def create_repository(
                 "GitHub Personal Access Tokenを"
                 "入力してください。"
             ),
-        )
-
-    if not encryption_key:
-        raise HTTPException(
-            status_code=400,
-            detail="暗号化キーを入力してください。",
         )
 
     ui_connected = test_github_repository(
@@ -870,11 +770,8 @@ def create_repository(
             ui_repository_url,
         "api_repository_url":
             api_repository_url,
-        "github_token_enc":
-            encrypt_token(
-                github_token,
-                encryption_key,
-            ),
+        "github_token":
+            github_token,
         "ui_connection_status":
             "SUCCESS"
             if ui_connected
@@ -962,26 +859,13 @@ def update_repository(
             now_iso(),
     }
 
-    github_token = normalize_text(
+    if normalize_text(
         request.github_token
-    )
-
-    encryption_key = normalize_text(
-        request.encryption_key
-    )
-
-    if github_token:
-        if not encryption_key:
-            raise HTTPException(
-                status_code=400,
-                detail="暗号化キーを入力してください。",
-            )
-
+    ):
         update_data[
-            "github_token_enc"
-        ] = encrypt_token(
-            github_token,
-            encryption_key,
+            "github_token"
+        ] = normalize_text(
+            request.github_token
         )
 
     if (
@@ -997,7 +881,9 @@ def update_repository(
         != current.get(
             "api_repository_url"
         )
-        or github_token
+        or normalize_text(
+            request.github_token
+        )
     ):
         update_data[
             "ui_connection_status"
