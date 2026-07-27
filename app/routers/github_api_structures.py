@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, Response, status
 
-from github_structure_common import (
+from .github_structure_common import (
     GitHubStructureRequest,
     create_structure,
     delete_structure,
