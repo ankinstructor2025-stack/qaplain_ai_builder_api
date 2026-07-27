@@ -696,9 +696,18 @@ def get_repository(
         user["email"],
     )
 
-    return document_to_dict(
+    data = document_to_dict(
         document
     )
+
+    document_data = document.to_dict() or {}
+
+    data["github_token"] = document_data.get(
+        "github_token",
+        ""
+    )
+
+    return data
 
 
 @router.post(
